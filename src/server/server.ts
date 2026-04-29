@@ -24,6 +24,7 @@ import { STSymbolKind, FileSymbols, SymbolIndex, STSymbolExtended } from '../sha
 import { STASTParser } from './ast-parser';
 import { WorkspaceIndexer } from './workspace-indexer';
 import { setExtensionPath } from './extension-path';
+import { uriToFsPath } from './uri-utils';
 import { MemberAccessProvider } from './providers/member-access-provider';
 import { EnhancedDefinitionProvider } from './providers/definition-provider';
 import { MemberCompletionProvider } from './providers/completion-provider';
@@ -135,8 +136,8 @@ connection.onInitialized(() => {
     // Initialize workspace indexer
     connection.workspace.getWorkspaceFolders().then(folders => {
         if (folders && folders.length > 0) {
-            const workspaceRoot = folders[0].uri.replace('file://', '');
-            workspaceIndexer.initialize(workspaceRoot);
+            const workspaceRoot = uriToFsPath(folders[0].uri);
+            workspaceIndexer.initialize(workspaceRoot, (msg) => connection.console.error(msg));
         }
     }).catch(error => {
         connection.console.error(`Workspace init failed: ${error}`);
@@ -449,18 +450,32 @@ connection.onDocumentRangeFormatting((params) => {
 // Document change handlers - now with workspace indexer integration and debouncing
 let changeDebounceTimer: NodeJS.Timeout | undefined;
 
+/**
+ * Collect symbols from every other indexed file so cross-file references
+ * (globals, POUs in shared library files) are visible to semantic checks.
+ */
+function getOtherFileSymbols(currentUri: string): STSymbolExtended[] {
+    const others: STSymbolExtended[] = [];
+    for (const sym of workspaceIndexer.getAllSymbols()) {
+        if (sym.location.uri !== currentUri) {
+            others.push(sym);
+        }
+    }
+    return others;
+}
+
 documents.onDidChangeContent(change => {
     // Debounce to avoid re-parsing on every keystroke
     if (changeDebounceTimer) {
         clearTimeout(changeDebounceTimer);
     }
-    
+
     changeDebounceTimer = setTimeout(() => {
         const symbols = updateSymbolIndex(change.document);
         workspaceIndexer.updateFileIndex(change.document);
 
-        // Publish diagnostics (pass symbols for semantic checks)
-        const diagnostics = computeDiagnostics(change.document, symbols);
+        const workspaceSymbols = getOtherFileSymbols(change.document.uri);
+        const diagnostics = computeDiagnostics(change.document, symbols, workspaceSymbols);
         connection.sendDiagnostics({ uri: change.document.uri, diagnostics });
     }, 300); // Wait 300ms after last change
 });
@@ -469,8 +484,8 @@ documents.onDidOpen(change => {
     const symbols = updateSymbolIndex(change.document);
     workspaceIndexer.updateFileIndex(change.document);
 
-    // Publish diagnostics on open (pass symbols for semantic checks)
-    const diagnostics = computeDiagnostics(change.document, symbols);
+    const workspaceSymbols = getOtherFileSymbols(change.document.uri);
+    const diagnostics = computeDiagnostics(change.document, symbols, workspaceSymbols);
     connection.sendDiagnostics({ uri: change.document.uri, diagnostics });
 });
 
@@ -495,13 +510,17 @@ documents.onDidClose(event => {
                 }
             }
         });
-        
+
         // Remove file entry
         symbolIndex.files.delete(uri);
     }
-    
-    // Remove from workspace indexer
-    workspaceIndexer.removeFileFromIndex(uri);
+
+    // Re-read from disk so the workspace index reflects saved state — discarding
+    // unsaved buffer changes — instead of evicting the file (it is still part
+    // of the workspace).
+    workspaceIndexer.refreshFromDisk(uri).catch(error => {
+        connection.console.error(`Failed to refresh ${uri} from disk on close: ${error}`);
+    });
 });
 
 // Make the text document manager listen on the connection

@@ -729,15 +729,18 @@ function checkDuplicateDeclarations(symbols: STSymbolExtended[]): Diagnostic[] {
 function checkUndefinedVariables(
     cleanLines: CleanLine[],
     rawLines: string[],
-    symbols: STSymbolExtended[]
+    symbols: STSymbolExtended[],
+    workspaceSymbols?: STSymbolExtended[]
 ): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     const pouRanges = buildPouRanges(symbols, rawLines);
 
-    // Build cross-file POU name set (all programs, functions, FBs in file)
+    // Build POU and global-variable name sets across the local file and
+    // workspace-wide symbols so identifiers defined in other indexed files
+    // (e.g. shared library/constants) are not flagged as undefined.
     const pouNames = new Set<string>();
     const globalVarNames = new Set<string>();
-    for (const sym of symbols) {
+    const collectNames = (sym: STSymbolExtended) => {
         if (sym.kind === STSymbolKind.Program ||
             sym.kind === STSymbolKind.Function ||
             sym.kind === STSymbolKind.FunctionBlock) {
@@ -746,6 +749,10 @@ function checkUndefinedVariables(
         if (!sym.parentSymbol && (sym.kind === STSymbolKind.Variable || sym.kind === STSymbolKind.FunctionBlockInstance)) {
             globalVarNames.add(sym.name.toUpperCase());
         }
+    };
+    for (const sym of symbols) collectNames(sym);
+    if (workspaceSymbols) {
+        for (const sym of workspaceSymbols) collectNames(sym);
     }
 
     // Build set of all user-defined TYPE names (TYPE...END_TYPE)
@@ -2337,7 +2344,11 @@ function checkAssignmentConfusion(cleanLines: CleanLine[]): Diagnostic[] {
  * @param document The text document
  * @param symbols Optional parsed symbols from STASTParser for semantic analysis
  */
-export function computeDiagnostics(document: TextDocument, symbols?: STSymbolExtended[]): Diagnostic[] {
+export function computeDiagnostics(
+    document: TextDocument,
+    symbols?: STSymbolExtended[],
+    workspaceSymbols?: STSymbolExtended[]
+): Diagnostic[] {
     const text = document.getText();
     const rawLines = text.split('\n');
     const cleanLines = stripAllComments(rawLines);
@@ -2357,7 +2368,7 @@ export function computeDiagnostics(document: TextDocument, symbols?: STSymbolExt
     if (symbols && symbols.length > 0) {
         diagnostics.push(...checkMissingSemicolons(cleanLines, rawLines));
         diagnostics.push(...checkDuplicateDeclarations(symbols));
-        diagnostics.push(...checkUndefinedVariables(cleanLines, rawLines, symbols));
+        diagnostics.push(...checkUndefinedVariables(cleanLines, rawLines, symbols, workspaceSymbols));
         diagnostics.push(...checkUnusedVariables(cleanLines, rawLines, symbols));
         diagnostics.push(...checkTypeMismatches(cleanLines, symbols));
         diagnostics.push(...checkFBCallInvalidMembers(cleanLines, rawLines, symbols));

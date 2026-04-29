@@ -18,6 +18,7 @@ import {
     STSymbol
 } from '../../shared/types';
 import { getExtensionPath } from '../extension-path';
+import { fsPathToUri } from '../uri-utils';
 
 export class MemberAccessProvider {
     private standardFBMembers: Map<string, FBMemberDefinition[]> = new Map();
@@ -397,7 +398,7 @@ export class MemberAccessProvider {
         }
 
         const definitionPath = path.join(extensionPath, 'iec61131-definitions', `${fbType}.st`);
-        const definitionUri = `file://${definitionPath}`;
+        const definitionUri = fsPathToUri(definitionPath);
 
         // Calculate the approximate line number for the member
         const lineNumber = this.getMemberLineNumber(fbType, memberName);

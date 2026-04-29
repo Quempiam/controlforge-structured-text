@@ -17,6 +17,9 @@ import {
     ASTNodeType
 } from '../shared/types';
 import { STASTParser } from './ast-parser';
+import { uriToFsPath, fsPathToUri } from './uri-utils';
+
+type LogFn = (message: string) => void;
 
 export class WorkspaceIndexer {
     private index: WorkspaceSymbolIndex;
@@ -24,6 +27,7 @@ export class WorkspaceIndexer {
     private indexedFiles: Set<string> = new Set();
     /** Raw file content cache keyed by URI, populated during indexing. */
     private fileContents: Map<string, string> = new Map();
+    private logError: LogFn = (msg) => console.error(msg);
 
     constructor() {
         this.index = {
@@ -40,8 +44,11 @@ export class WorkspaceIndexer {
     /**
      * Initialize the workspace indexer with a root path
      */
-    public initialize(workspaceRoot: string): void {
+    public initialize(workspaceRoot: string, logError?: LogFn): void {
         this.workspaceRoot = workspaceRoot;
+        if (logError) {
+            this.logError = logError;
+        }
         this.scanWorkspace();
     }
 
@@ -55,7 +62,7 @@ export class WorkspaceIndexer {
             await this.scanDirectory(this.workspaceRoot);
             this.buildCrossReferences();
         } catch (error) {
-            console.error('Error scanning workspace:', error);
+            this.logError(`Error scanning workspace at ${this.workspaceRoot}: ${error}`);
         }
     }
 
@@ -95,7 +102,29 @@ export class WorkspaceIndexer {
             this.updateFileIndex(document);
             this.indexedFiles.add(filePath);
         } catch (error) {
-            console.error(`Error indexing file ${filePath}:`, error);
+            this.logError(`Error indexing file ${filePath}: ${error}`);
+        }
+    }
+
+    /**
+     * Re-read a file from disk and update the index. Used when a buffer is
+     * closed and we want to discard unsaved changes while keeping the file in
+     * the workspace index. Removes the file from the index if it no longer
+     * exists on disk.
+     */
+    public async refreshFromDisk(uri: string): Promise<void> {
+        const filePath = this.uriToPath(uri);
+        try {
+            const content = await fs.promises.readFile(filePath, 'utf8');
+            const document = TextDocument.create(uri, 'structured-text', 1, content);
+            this.updateFileIndex(document);
+            this.indexedFiles.add(filePath);
+        } catch (error: any) {
+            if (error?.code === 'ENOENT') {
+                this.removeFileFromIndex(uri);
+                return;
+            }
+            this.logError(`Error refreshing file ${filePath} from disk: ${error}`);
         }
     }
 
@@ -394,13 +423,13 @@ export class WorkspaceIndexer {
      * Convert file path to URI
      */
     private pathToUri(filePath: string): string {
-        return `file://${filePath.replace(/\\/g, '/')}`;
+        return fsPathToUri(filePath);
     }
 
     /**
      * Convert URI to file path
      */
     private uriToPath(uri: string): string {
-        return uri.replace('file://', '').replace(/\//g, path.sep);
+        return uriToFsPath(uri);
     }
 }
