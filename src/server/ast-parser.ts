@@ -61,12 +61,13 @@ export class STASTParser {
             const programs = this.safeOp(() => this.parsePrograms(), 'parsePrograms');
             const functions = this.safeOp(() => this.parseFunctions(), 'parseFunctions');
             const functionBlocks = this.safeOp(() => this.parseFunctionBlocks(), 'parseFunctionBlocks');
+            const actions = this.safeOp(() => this.parseActions(), 'parseActions');
             const globalVariables = this.safeOp(() => this.parseGlobalVariables(), 'parseGlobalVariables');
 
-            symbols.push(...programs, ...functions, ...functionBlocks, ...globalVariables);
+            symbols.push(...programs, ...functions, ...functionBlocks, ...actions, ...globalVariables);
 
             // Flatten member symbols into top-level list with parentSymbol set
-            for (const parent of [...programs, ...functions, ...functionBlocks]) {
+            for (const parent of [...programs, ...functions, ...functionBlocks, ...actions]) {
                 if (parent.members) {
                     for (const member of parent.members) {
                         member.parentSymbol = parent.name;
@@ -162,6 +163,40 @@ export class STASTParser {
                 scope: STScope.FunctionBlock,
                 parameters,
                 members: variables,
+                references: []
+            });
+        }
+        return results;
+    }
+
+    /**
+     * Parse standalone `ACTION Name: ... END_ACTION` blocks.
+     *
+     * An Action shares its parent POU's variable scope rather than declaring
+     * its own VAR_INPUT/VAR_OUTPUT/VAR sections, so unlike PROGRAM/FUNCTION/
+     * FUNCTION_BLOCK no parameters or local members are parsed here - just
+     * the name, so it registers as a known callable symbol workspace-wide
+     * (e.g. when exported as its own file by a tool that splits a POU's
+     * actions out, the unqualified call in the parent POU's body would
+     * otherwise be flagged as an undefined identifier).
+     */
+    private parseActions(): STSymbolExtended[] {
+        const results: STSymbolExtended[] = [];
+        const regex = /^\s*ACTION\s+(\w+)/i;
+
+        for (let i = 0; i < this.lines.length; i++) {
+            const match = this.lines[i].match(regex);
+            if (!match) continue;
+
+            const name = match[1];
+            const location = this.createLocation(i, this.lines[i].indexOf(name), name.length);
+
+            results.push({
+                name,
+                normalizedName: name.toLowerCase(),
+                kind: STSymbolKind.Action,
+                location,
+                scope: STScope.Action,
                 references: []
             });
         }

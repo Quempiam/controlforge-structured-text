@@ -172,5 +172,8 @@
     "typescript": "^5.9.3",
     "webpack": "^5.99.9",
     "webpack-cli": "^6.0.1"
+  },
+  "allowScripts": {
+    "@vscode/vsce-sign@2.0.9": true
   }
 }

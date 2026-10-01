@@ -24,6 +24,7 @@ export enum STSymbolKind {
     Function = 'function',
     FunctionBlock = 'function_block',
     Program = 'program',
+    Action = 'action',
     Parameter = 'parameter',
     Constant = 'constant',
     FunctionBlockInstance = 'function_block_instance',
@@ -41,7 +42,8 @@ export enum STScope {
     InOut = 'inout',
     Function = 'function',
     FunctionBlock = 'function_block',
-    Program = 'program'
+    Program = 'program',
+    Action = 'action'
 }
 
 /**

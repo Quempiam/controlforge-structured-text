@@ -361,6 +361,11 @@ interface PouRange {
  */
 function buildPouRanges(symbols: STSymbolExtended[], rawLines: string[]): PouRange[] {
     const ranges: PouRange[] = [];
+    // Deliberately excludes STSymbolKind.Action: an Action shares its parent
+    // POU's variable scope instead of declaring its own, and this parser has
+    // no way to know that parent from the Action's symbol alone. Treating an
+    // Action as a checkable POU range here would flag every reference to the
+    // parent's variables as undefined - worse than not checking at all.
     const pouSymbols = symbols.filter(s =>
         s.kind === STSymbolKind.Program ||
         s.kind === STSymbolKind.Function ||
@@ -743,7 +748,8 @@ function checkUndefinedVariables(
     const collectNames = (sym: STSymbolExtended) => {
         if (sym.kind === STSymbolKind.Program ||
             sym.kind === STSymbolKind.Function ||
-            sym.kind === STSymbolKind.FunctionBlock) {
+            sym.kind === STSymbolKind.FunctionBlock ||
+            sym.kind === STSymbolKind.Action) {
             pouNames.add(sym.name.toUpperCase());
         }
         if (!sym.parentSymbol && (sym.kind === STSymbolKind.Variable || sym.kind === STSymbolKind.FunctionBlockInstance)) {
