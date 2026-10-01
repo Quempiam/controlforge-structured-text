@@ -238,6 +238,34 @@ export class STASTParser {
     }
 
     /**
+     * Extract a trailing same-line comment from a declaration, e.g.
+     * `value : INT; // Internal counter for X` - a common one-line-per-field
+     * documentation style, distinct from the LibDoc block-above convention
+     * extractLeadingDocComment handles. Checked as a fallback when there's
+     * no leading doc comment. Only looks at the given line (the
+     * declaration's own start line) - a trailing comment on a later line of
+     * a multi-line declaration is not picked up.
+     */
+    private extractTrailingComment(rawLine: string | undefined): string | undefined {
+        if (!rawLine) return undefined;
+
+        const withoutBlocks = rawLine.replace(/\(\*.*?\*\)/g, '');
+        const slashIdx = withoutBlocks.indexOf('//');
+        if (slashIdx !== -1) {
+            const text = withoutBlocks.slice(slashIdx + 2).trim();
+            return text || undefined;
+        }
+
+        const blockMatches = [...rawLine.matchAll(/\(\*(.*?)\*\)/g)];
+        if (blockMatches.length > 0) {
+            const last = blockMatches[blockMatches.length - 1][1].trim();
+            return last || undefined;
+        }
+
+        return undefined;
+    }
+
+    /**
      * Light reST-to-Markdown touch-up for a LibDoc comment's lines.
      * reST and Markdown already agree on **bold**, *italic*, and `- item`
      * bullet lists, so most text passes through unchanged. Only the
@@ -380,7 +408,7 @@ export class STASTParser {
                     } else {
                         description = `Global instance of ${decl.baseType}`;
                     }
-                    description = this.extractLeadingDocComment(lineIndex) || description;
+                    description = this.extractLeadingDocComment(lineIndex) || this.extractTrailingComment(this.lines[lineIndex]) || description;
 
                     const sym: STSymbolExtended = {
                         name: varName,
@@ -447,7 +475,7 @@ export class STASTParser {
                     } else {
                         description = `Instance of ${decl.baseType}`;
                     }
-                    description = this.extractLeadingDocComment(lineIndex) || description;
+                    description = this.extractLeadingDocComment(lineIndex) || this.extractTrailingComment(this.lines[lineIndex]) || description;
 
                     const varLocation = this.createLocation(lineIndex, this.findColumnOf(lineIndex, varName), varName.length);
 
