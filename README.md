@@ -1,5 +1,43 @@
 # ControlForge Structured Text
 
+> ## ⚠️ This is an unofficial personal fork — not the original project
+>
+> This fork is **not affiliated with, endorsed by, or reviewed by ControlForge
+> Systems / Michael Distel**, the original author. It exists only because
+> GitHub does not allow a fork of a public repository to be made private, so
+> this notice is here instead.
+>
+> **For the real extension**, install [ControlForge Structured Text from the
+> VS Code
+> Marketplace](https://marketplace.visualstudio.com/items?itemName=ControlForgeSystems.controlforge-structured-text)
+> or use the [upstream repository](https://github.com/ControlForge-Systems/controlforge-structured-text).
+> This fork is never published there and is only built locally into a
+> `.vsix` for one person's own sideloaded install.
+>
+> **What's different here**, on top of upstream `v1.4.1`:
+> - A [cross-file symbol visibility fix](https://github.com/ControlForge-Systems/controlforge-structured-text/commit/d6d6d4d)
+>   originally written by [kuzia99](https://github.com/kuzia99) on their own
+>   fork, cherry-picked here with their authorship intact — not yet merged
+>   upstream as of this writing.
+> - Support for parsing standalone `ACTION Name: ... END_ACTION` and
+>   `METHOD Name : Type ... END_METHOD` blocks **declared in their own file**,
+>   with no enclosing `PROGRAM`/`FUNCTION_BLOCK`. This is **not standard
+>   IEC 61131-3 text layout** — it matches the convention used by a specific
+>   CODESYS project-mirroring tool that exports one code object per file,
+>   preserving the project tree as folders (e.g.
+>   `MyFB/MyFB.fb.st` + `MyFB/mth/someMethod.mth.st`). The method/action's
+>   owning POU is inferred **from its folder position**, not from anything in
+>   the IEC 61131-3 text itself, since that information doesn't otherwise
+>   exist once the object is split into its own file. **If your project
+>   doesn't follow that exact folder convention, this change does nothing for
+>   you** — standalone `ACTION`/`METHOD` blocks outside a `<Pou>/act/` or
+>   `<FBName>/mth/` directory are not linked to anything.
+>
+> If you found this because you also use a CODESYS project exported this
+> way: feel free to use it, but treat it as a narrow, workflow-specific
+> patch, not a general-purpose improvement — upstream is the place to ask
+> for real IEC 61131-3 Action/Method language support.
+
 [![Visual Studio Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/ControlForgeSystems.controlforge-structured-text?label=VS%20Marketplace&color=0066b8)](https://marketplace.visualstudio.com/items?itemName=ControlForgeSystems.controlforge-structured-text)
 [![Visual Studio Marketplace Installs](https://img.shields.io/visual-studio-marketplace/i/ControlForgeSystems.controlforge-structured-text)](https://marketplace.visualstudio.com/items?itemName=ControlForgeSystems.controlforge-structured-text)
 
