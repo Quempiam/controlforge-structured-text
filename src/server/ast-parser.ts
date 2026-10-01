@@ -11,6 +11,7 @@
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Position, Range, Location } from 'vscode-languageserver';
+import * as path from 'path';
 import {
     STSymbolKind,
     STScope,
@@ -18,6 +19,7 @@ import {
     STSymbolExtended,
     ArrayDimension
 } from '../shared/types';
+import { uriToFsPath } from './uri-utils';
 
 /**
  * Parsed declaration result from a single statement (may contain multiple names)
@@ -62,9 +64,10 @@ export class STASTParser {
             const functions = this.safeOp(() => this.parseFunctions(), 'parseFunctions');
             const functionBlocks = this.safeOp(() => this.parseFunctionBlocks(), 'parseFunctionBlocks');
             const actions = this.safeOp(() => this.parseActions(), 'parseActions');
+            const methods = this.safeOp(() => this.parseMethods(), 'parseMethods');
             const globalVariables = this.safeOp(() => this.parseGlobalVariables(), 'parseGlobalVariables');
 
-            symbols.push(...programs, ...functions, ...functionBlocks, ...actions, ...globalVariables);
+            symbols.push(...programs, ...functions, ...functionBlocks, ...actions, ...methods, ...globalVariables);
 
             // Flatten member symbols into top-level list with parentSymbol set
             for (const parent of [...programs, ...functions, ...functionBlocks, ...actions]) {
@@ -170,6 +173,28 @@ export class STASTParser {
     }
 
     /**
+     * Infer a split-out member's owning POU/FB name from its folder position,
+     * matching the convention used by tools that export one code object per
+     * file (e.g. CODESYS project mirrors): a member file sitting directly
+     * under a `<parentFolder>/<kindFolder>/` directory belongs to the POU
+     * named `<parentFolder>`. `kindFolder` is checked case-insensitively.
+     *
+     * Returns undefined for any document not following this convention
+     * (e.g. untitled buffers, or a flat/non-split project layout) - callers
+     * must treat a missing parent as "unknown", not as a parsing error.
+     */
+    private inferParentFromFolderConvention(kindFolder: string): string | undefined {
+        const fsPath = uriToFsPath(this.document.uri);
+        if (!fsPath || fsPath === this.document.uri) return undefined; // not a file:// URI
+
+        const dir = path.dirname(fsPath);
+        if (path.basename(dir).toLowerCase() !== kindFolder.toLowerCase()) return undefined;
+
+        const parentName = path.basename(path.dirname(dir));
+        return parentName || undefined;
+    }
+
+    /**
      * Parse standalone `ACTION Name: ... END_ACTION` blocks.
      *
      * An Action shares its parent POU's variable scope rather than declaring
@@ -179,10 +204,16 @@ export class STASTParser {
      * (e.g. when exported as its own file by a tool that splits a POU's
      * actions out, the unqualified call in the parent POU's body would
      * otherwise be flagged as an undefined identifier).
+     *
+     * `parentSymbol` is set when the file sits under a `<Pou>/act/` folder
+     * (see inferParentFromFolderConvention) - informational for now, not
+     * relied on by the undefined-identifier check, which treats all Action
+     * names as a single flat set regardless of parent.
      */
     private parseActions(): STSymbolExtended[] {
         const results: STSymbolExtended[] = [];
         const regex = /^\s*ACTION\s+(\w+)/i;
+        const inferredParent = this.inferParentFromFolderConvention('act');
 
         for (let i = 0; i < this.lines.length; i++) {
             const match = this.lines[i].match(regex);
@@ -197,6 +228,49 @@ export class STASTParser {
                 kind: STSymbolKind.Action,
                 location,
                 scope: STScope.Action,
+                parentSymbol: inferredParent,
+                references: []
+            });
+        }
+        return results;
+    }
+
+    /**
+     * Parse standalone `METHOD [PUBLIC|PRIVATE|PROTECTED|INTERNAL] Name [: ReturnType]
+     * ... END_METHOD` blocks.
+     *
+     * Like Actions, a Method shares its parent FB's scope. `parentSymbol` is
+     * set when the file sits under a `<FBName>/mth/` folder (see
+     * inferParentFromFolderConvention), so that member-access validation
+     * (member-access-provider.ts) can tell a method apart from a same-named
+     * method on an unrelated FB - important since method names routinely
+     * repeat across different function blocks in a real project (e.g.
+     * `mAlarms`, `mResetCounters`). Unlike parseActions's Action handling,
+     * a Method with no inferred parent is NOT registered as a flat/global
+     * name, since that would make same-named methods on different FBs
+     * indistinguishable - see buildCustomFBTypes in diagnostics-provider.ts.
+     */
+    private parseMethods(): STSymbolExtended[] {
+        const results: STSymbolExtended[] = [];
+        const regex = /^\s*METHOD\s+(?:(PUBLIC|PRIVATE|PROTECTED|INTERNAL|ABSTRACT|FINAL)\s+)?(\w+)\s*(?::\s*([\w\[\]]+))?/i;
+        const inferredParent = this.inferParentFromFolderConvention('mth');
+
+        for (let i = 0; i < this.lines.length; i++) {
+            const match = this.lines[i].match(regex);
+            if (!match) continue;
+
+            const name = match[2];
+            const returnType = match[3];
+            const location = this.createLocation(i, this.lines[i].indexOf(name), name.length);
+
+            results.push({
+                name,
+                normalizedName: name.toLowerCase(),
+                kind: STSymbolKind.Method,
+                location,
+                scope: STScope.Function,
+                returnType,
+                parentSymbol: inferredParent,
                 references: []
             });
         }

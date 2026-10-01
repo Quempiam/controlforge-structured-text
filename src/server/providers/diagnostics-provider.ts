@@ -943,19 +943,36 @@ function escapeRegex(s: string): string {
 /**
  * Build a Map<string, STDeclaration> of custom FB types from the symbol list.
  * Used by FB call validation checks.
+ *
+ * Accepts workspace-wide symbols in addition to the local file's own, so an
+ * FB declared in one file (e.g. `FooFb.fb.st`) and its methods declared in
+ * sibling files (e.g. `FooFb/mth/bar.mth.st`, see ast-parser.ts's
+ * parseMethods) are both visible when validating a call site in a third
+ * file. A method is only attached to an FB when its parentSymbol (inferred
+ * from folder position) matches that FB's name - methods with no resolvable
+ * parent are skipped here rather than guessed at, since method names
+ * routinely repeat across unrelated FBs.
  */
-function buildCustomFBTypes(symbols: STSymbolExtended[]): Map<string, STDeclaration> {
+function buildCustomFBTypes(symbols: STSymbolExtended[], workspaceSymbols?: STSymbolExtended[]): Map<string, STDeclaration> {
+    const allSymbols = workspaceSymbols ? [...symbols, ...workspaceSymbols] : symbols;
     const map = new Map<string, STDeclaration>();
-    for (const sym of symbols) {
+    for (const sym of allSymbols) {
         if (sym.kind !== STSymbolKind.FunctionBlock) continue;
+        const nameUpper = sym.name.toUpperCase();
+        if (map.has(nameUpper)) continue; // keep first (local-file) declaration on duplicate
+        const methods = allSymbols.filter(s =>
+            s.kind === STSymbolKind.Method &&
+            s.parentSymbol?.toUpperCase() === nameUpper
+        );
         const decl: STDeclaration = {
             type: 'function_block' as never,
             location: sym.location.range,
             name: sym.name,
             parameters: sym.parameters,
             variables: sym.members as STDeclaration['variables'],
+            methods: methods.length > 0 ? methods : undefined,
         };
-        map.set(sym.name.toUpperCase(), decl);
+        map.set(nameUpper, decl);
     }
     return map;
 }
@@ -974,11 +991,12 @@ function buildCustomFBTypes(symbols: STSymbolExtended[]): Map<string, STDeclarat
 function checkFBCallInvalidMembers(
     cleanLines: CleanLine[],
     rawLines: string[],
-    symbols: STSymbolExtended[]
+    symbols: STSymbolExtended[],
+    workspaceSymbols?: STSymbolExtended[]
 ): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     const memberProvider = new MemberAccessProvider();
-    const customFBTypes = buildCustomFBTypes(symbols);
+    const customFBTypes = buildCustomFBTypes(symbols, workspaceSymbols);
     const pouRanges = buildPouRanges(symbols, rawLines);
 
     // Build instance→type map: variable name (upper) → dataType (upper)
@@ -1056,12 +1074,13 @@ function checkFBCallInvalidMembers(
 function checkFBCallDuplicateParams(
     cleanLines: CleanLine[],
     rawLines: string[],
-    symbols: STSymbolExtended[]
+    symbols: STSymbolExtended[],
+    workspaceSymbols?: STSymbolExtended[]
 ): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     const pouRanges = buildPouRanges(symbols, rawLines);
     const memberProvider = new MemberAccessProvider();
-    const customFBTypes = buildCustomFBTypes(symbols);
+    const customFBTypes = buildCustomFBTypes(symbols, workspaceSymbols);
 
     // Build set of FB instance names (upper) for quick lookup.
     // Include both FunctionBlockInstance and Variable kinds — standard FBs (TON, etc.)
@@ -2377,8 +2396,8 @@ export function computeDiagnostics(
         diagnostics.push(...checkUndefinedVariables(cleanLines, rawLines, symbols, workspaceSymbols));
         diagnostics.push(...checkUnusedVariables(cleanLines, rawLines, symbols));
         diagnostics.push(...checkTypeMismatches(cleanLines, symbols));
-        diagnostics.push(...checkFBCallInvalidMembers(cleanLines, rawLines, symbols));
-        diagnostics.push(...checkFBCallDuplicateParams(cleanLines, rawLines, symbols));
+        diagnostics.push(...checkFBCallInvalidMembers(cleanLines, rawLines, symbols, workspaceSymbols));
+        diagnostics.push(...checkFBCallDuplicateParams(cleanLines, rawLines, symbols, workspaceSymbols));
         diagnostics.push(...checkConstantAssignment(cleanLines, rawLines, symbols));
         diagnostics.push(...checkArrayBoundsAccess(cleanLines, rawLines, symbols));
         diagnostics.push(...checkForLoopBounds(cleanLines));

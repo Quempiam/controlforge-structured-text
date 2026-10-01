@@ -25,6 +25,7 @@ export enum STSymbolKind {
     FunctionBlock = 'function_block',
     Program = 'program',
     Action = 'action',
+    Method = 'method',
     Parameter = 'parameter',
     Constant = 'constant',
     FunctionBlockInstance = 'function_block_instance',
@@ -135,6 +136,7 @@ export interface STDeclaration extends ASTNode {
     parameters?: STParameter[];
     variables?: STSymbol[];
     returnType?: string;  // Only for functions
+    methods?: STSymbolExtended[]; // For function blocks: METHOD symbols resolved to this FB by folder convention
 }
 
 /**
@@ -175,7 +177,7 @@ export interface MemberAccessExpression {
 export interface FBMemberDefinition {
     name: string;               // Member name (Q, ET, etc.)
     dataType: string;           // BOOL, TIME, etc.
-    direction: 'VAR_INPUT' | 'VAR_OUTPUT' | 'VAR_IN_OUT' | 'VAR' | 'VAR_TEMP' | 'VAR_GLOBAL';
+    direction: 'VAR_INPUT' | 'VAR_OUTPUT' | 'VAR_IN_OUT' | 'VAR' | 'VAR_TEMP' | 'VAR_GLOBAL' | 'METHOD';
     description?: string;       // Member description
     fbType: string;             // Parent FB type
 }

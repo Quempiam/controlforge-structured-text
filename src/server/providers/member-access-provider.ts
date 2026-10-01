@@ -317,6 +317,15 @@ export class MemberAccessProvider {
             }
         }
 
+        // Check custom FB methods (resolved to this FB by folder convention -
+        // see ast-parser.ts's parseMethods / buildCustomFBTypes)
+        if (customFB && customFB.methods) {
+            const method = customFB.methods.find(m => m.name === memberName);
+            if (method) {
+                return method.location;
+            }
+        }
+
         return null;
     }
 
@@ -378,6 +387,19 @@ export class MemberAccessProvider {
                             fbType: instanceType
                         });
                     }
+                });
+            }
+
+            // Add methods resolved to this FB by folder convention
+            if (customFB.methods) {
+                customFB.methods.forEach(method => {
+                    members.push({
+                        name: method.name,
+                        dataType: method.returnType || 'UNKNOWN',
+                        direction: 'METHOD',
+                        description: method.returnType ? `Method returning ${method.returnType}` : 'Method',
+                        fbType: instanceType
+                    });
                 });
             }
         }

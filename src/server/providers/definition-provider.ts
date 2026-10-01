@@ -189,6 +189,10 @@ export class EnhancedDefinitionProvider {
         allSymbols
             .filter(symbol => symbol.kind === STSymbolKind.FunctionBlock)
             .forEach(fbSymbol => {
+                const methods = allSymbols.filter(s =>
+                    s.kind === STSymbolKind.Method &&
+                    s.parentSymbol?.toUpperCase() === fbSymbol.name.toUpperCase()
+                );
                 // Create a declaration-like structure for the FB
                 const fbDeclaration = {
                     type: 'function_block' as any,
@@ -196,6 +200,7 @@ export class EnhancedDefinitionProvider {
                     name: fbSymbol.name,
                     parameters: fbSymbol.parameters,
                     variables: fbSymbol.members,
+                    methods: methods.length > 0 ? methods : undefined,
                     returnType: undefined
                 };
                 customFBTypes.set(fbSymbol.name, fbDeclaration);
