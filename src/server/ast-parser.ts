@@ -108,6 +108,7 @@ export class STASTParser {
                 location,
                 scope: STScope.Program,
                 members: variables,
+                description: this.extractLeadingDocComment(i),
                 references: []
             });
         }
@@ -138,6 +139,7 @@ export class STASTParser {
                 returnType,
                 parameters,
                 members: variables,
+                description: this.extractLeadingDocComment(i),
                 references: []
             });
         }
@@ -166,6 +168,7 @@ export class STASTParser {
                 scope: STScope.FunctionBlock,
                 parameters,
                 members: variables,
+                description: this.extractLeadingDocComment(i),
                 references: []
             });
         }
@@ -192,6 +195,68 @@ export class STASTParser {
 
         const parentName = path.basename(path.dirname(dir));
         return parentName || undefined;
+    }
+
+    /**
+     * Extract a CODESYS-style LibDoc documentation comment immediately
+     * preceding a declaration line, if any (see
+     * https://content.helpme-codesys.com/en/LibDevSummary/reSTOverview.html).
+     *
+     * Walks backward from `declLineIndex` collecting a contiguous run of
+     * comment-only lines (`///`, `//`, or `(* ... *)`) with no blank line in
+     * between - a blank line breaks the run, so this naturally stops before
+     * reaching an unrelated comment further up (e.g. this project's own
+     * mirror_export header, which always leaves a blank line before the
+     * declaration it precedes). Returns undefined when there's nothing
+     * (the common case for most declarations today).
+     */
+    private extractLeadingDocComment(declLineIndex: number): string | undefined {
+        const collected: string[] = [];
+
+        for (let i = declLineIndex - 1; i >= 0; i--) {
+            const raw = this.lines[i];
+            if (raw === undefined) break;
+            const trimmed = raw.trim();
+            if (trimmed === '') break; // blank line ends the run
+
+            let content: string | null = null;
+            if (trimmed.startsWith('///')) {
+                content = trimmed.slice(3);
+            } else if (trimmed.startsWith('//')) {
+                content = trimmed.slice(2);
+            } else if (trimmed.startsWith('(*') && trimmed.endsWith('*)')) {
+                content = trimmed.slice(2, -2);
+            } else {
+                break; // not a comment line - run ends
+            }
+
+            collected.unshift(content.trim());
+        }
+
+        if (collected.length === 0) return undefined;
+        return this.renderDocComment(collected);
+    }
+
+    /**
+     * Light reST-to-Markdown touch-up for a LibDoc comment's lines.
+     * reST and Markdown already agree on **bold**, *italic*, and `- item`
+     * bullet lists, so most text passes through unchanged. Only the
+     * CODESYS-specific field markers (`:return:`, `:prefix:`, etc.) and the
+     * `.. directive::` syntax need translating/dropping for a VS Code hover
+     * (which renders plain Markdown, not full reST).
+     */
+    private renderDocComment(lines: string[]): string {
+        const rendered = lines.map(line => {
+            const fieldMatch = line.match(/^:(\w[\w-]*):\s*(.*)$/);
+            if (fieldMatch) {
+                const [, field, rest] = fieldMatch;
+                const label = field.charAt(0).toUpperCase() + field.slice(1);
+                return `**${label}:** ${rest}`.trim();
+            }
+            if (line.startsWith('..')) return ''; // directive (e.g. .. image::) - not renderable here
+            return line;
+        });
+        return rendered.join('\n').trim();
     }
 
     /**
@@ -229,6 +294,7 @@ export class STASTParser {
                 location,
                 scope: STScope.Action,
                 parentSymbol: inferredParent,
+                description: this.extractLeadingDocComment(i),
                 references: []
             });
         }
@@ -271,6 +337,7 @@ export class STASTParser {
                 scope: STScope.Function,
                 returnType,
                 parentSymbol: inferredParent,
+                description: this.extractLeadingDocComment(i),
                 references: []
             });
         }
@@ -313,6 +380,7 @@ export class STASTParser {
                     } else {
                         description = `Global instance of ${decl.baseType}`;
                     }
+                    description = this.extractLeadingDocComment(lineIndex) || description;
 
                     const sym: STSymbolExtended = {
                         name: varName,
@@ -379,6 +447,7 @@ export class STASTParser {
                     } else {
                         description = `Instance of ${decl.baseType}`;
                     }
+                    description = this.extractLeadingDocComment(lineIndex) || description;
 
                     const varLocation = this.createLocation(lineIndex, this.findColumnOf(lineIndex, varName), varName.length);
 

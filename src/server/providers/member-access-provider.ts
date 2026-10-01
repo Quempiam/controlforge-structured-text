@@ -397,7 +397,7 @@ export class MemberAccessProvider {
                         name: method.name,
                         dataType: method.returnType || 'UNKNOWN',
                         direction: 'METHOD',
-                        description: method.returnType ? `Method returning ${method.returnType}` : 'Method',
+                        description: method.description || (method.returnType ? `Method returning ${method.returnType}` : 'Method'),
                         fbType: instanceType
                     });
                 });
