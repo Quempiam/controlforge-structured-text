@@ -464,6 +464,30 @@ function getOtherFileSymbols(currentUri: string): STSymbolExtended[] {
     return others;
 }
 
+/**
+ * For every Action/Method symbol in another file whose owning POU was
+ * inferred from folder position, collect that file's text under the owner's
+ * name (uppercased) - so the unused-variable check can see usages that live
+ * in a POU's split-out Actions/Methods.
+ */
+function getMemberFileTexts(currentUri: string): Map<string, string[]> {
+    const byParent = new Map<string, string[]>();
+    const seen = new Set<string>();
+    for (const sym of workspaceIndexer.getAllSymbols()) {
+        if ((sym.kind !== STSymbolKind.Action && sym.kind !== STSymbolKind.Method) ||
+            !sym.parentSymbol || sym.location.uri === currentUri) continue;
+        const key = `${sym.parentSymbol.toUpperCase()}|${sym.location.uri}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const text = workspaceIndexer.getFileContent(sym.location.uri);
+        if (!text) continue;
+        const parent = sym.parentSymbol.toUpperCase();
+        if (!byParent.has(parent)) byParent.set(parent, []);
+        byParent.get(parent)!.push(text);
+    }
+    return byParent;
+}
+
 documents.onDidChangeContent(change => {
     // Debounce to avoid re-parsing on every keystroke
     if (changeDebounceTimer) {
@@ -475,7 +499,7 @@ documents.onDidChangeContent(change => {
         workspaceIndexer.updateFileIndex(change.document);
 
         const workspaceSymbols = getOtherFileSymbols(change.document.uri);
-        const diagnostics = computeDiagnostics(change.document, symbols, workspaceSymbols);
+        const diagnostics = computeDiagnostics(change.document, symbols, workspaceSymbols, getMemberFileTexts(change.document.uri));
         connection.sendDiagnostics({ uri: change.document.uri, diagnostics });
     }, 300); // Wait 300ms after last change
 });
@@ -485,7 +509,7 @@ documents.onDidOpen(change => {
     workspaceIndexer.updateFileIndex(change.document);
 
     const workspaceSymbols = getOtherFileSymbols(change.document.uri);
-    const diagnostics = computeDiagnostics(change.document, symbols, workspaceSymbols);
+    const diagnostics = computeDiagnostics(change.document, symbols, workspaceSymbols, getMemberFileTexts(change.document.uri));
     connection.sendDiagnostics({ uri: change.document.uri, diagnostics });
 });
 

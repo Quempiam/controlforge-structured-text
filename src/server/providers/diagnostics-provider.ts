@@ -893,7 +893,8 @@ function extractBodyIdentifiers(line: string): BodyToken[] {
 function checkUnusedVariables(
     cleanLines: CleanLine[],
     rawLines: string[],
-    symbols: STSymbolExtended[]
+    symbols: STSymbolExtended[],
+    memberFileTexts?: Map<string, string[]>
 ): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     const pouRanges = buildPouRanges(symbols, rawLines);
@@ -912,6 +913,14 @@ function checkUnusedVariables(
             if (cl.lineIndex <= pou.startLine || cl.lineIndex >= pou.endLine) continue;
             if (isInVarSection(cl.lineIndex, varSections)) continue;
             bodyText += ' ' + cl.text;
+        }
+        // A POU's Actions/Methods live in sibling files but share its locals,
+        // so their text counts as usage too (see ast-parser.ts parseActions/
+        // parseMethods for how the owning POU is inferred).
+        for (const text of memberFileTexts?.get(pou.name.toUpperCase()) ?? []) {
+            for (const cl of stripAllComments(text.split(/\r?\n/))) {
+                bodyText += ' ' + cl.text;
+            }
         }
         const bodyUpper = bodyText.toUpperCase();
 
@@ -2372,7 +2381,8 @@ function checkAssignmentConfusion(cleanLines: CleanLine[]): Diagnostic[] {
 export function computeDiagnostics(
     document: TextDocument,
     symbols?: STSymbolExtended[],
-    workspaceSymbols?: STSymbolExtended[]
+    workspaceSymbols?: STSymbolExtended[],
+    memberFileTexts?: Map<string, string[]>
 ): Diagnostic[] {
     const text = document.getText();
     const rawLines = text.split('\n');
@@ -2394,7 +2404,7 @@ export function computeDiagnostics(
         diagnostics.push(...checkMissingSemicolons(cleanLines, rawLines));
         diagnostics.push(...checkDuplicateDeclarations(symbols));
         diagnostics.push(...checkUndefinedVariables(cleanLines, rawLines, symbols, workspaceSymbols));
-        diagnostics.push(...checkUnusedVariables(cleanLines, rawLines, symbols));
+        diagnostics.push(...checkUnusedVariables(cleanLines, rawLines, symbols, memberFileTexts));
         diagnostics.push(...checkTypeMismatches(cleanLines, symbols));
         diagnostics.push(...checkFBCallInvalidMembers(cleanLines, rawLines, symbols, workspaceSymbols));
         diagnostics.push(...checkFBCallDuplicateParams(cleanLines, rawLines, symbols, workspaceSymbols));
