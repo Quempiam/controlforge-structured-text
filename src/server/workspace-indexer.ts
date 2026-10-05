@@ -27,6 +27,8 @@ export class WorkspaceIndexer {
     private indexedFiles: Set<string> = new Set();
     /** Raw file content cache keyed by URI, populated during indexing. */
     private fileContents: Map<string, string> = new Map();
+    /** Cache for getWorkspaceDeclaredNames(); dropped whenever the index changes. */
+    private declaredNamesCache: Set<string> | null = null;
     private logError: LogFn = (msg) => console.error(msg);
 
     constructor() {
@@ -44,12 +46,12 @@ export class WorkspaceIndexer {
     /**
      * Initialize the workspace indexer with a root path
      */
-    public initialize(workspaceRoot: string, logError?: LogFn): void {
+    public initialize(workspaceRoot: string, logError?: LogFn, onIndexed?: () => void): void {
         this.workspaceRoot = workspaceRoot;
         if (logError) {
             this.logError = logError;
         }
-        this.scanWorkspace();
+        this.scanWorkspace().then(() => onIndexed?.());
     }
 
     /**
@@ -139,6 +141,7 @@ export class WorkspaceIndexer {
 
         // Cache raw content for rename and other text-level operations
         this.fileContents.set(uri, document.getText());
+        this.declaredNamesCache = null;
 
         // Parse symbols from the document
         const parser = new STASTParser(document);
@@ -177,6 +180,7 @@ export class WorkspaceIndexer {
 
         // Evict cached content
         this.fileContents.delete(uri);
+        this.declaredNamesCache = null;
 
         // Remove from indexed files tracking
         const filePath = this.uriToPath(uri);
@@ -312,6 +316,34 @@ export class WorkspaceIndexer {
      */
     public getFileContent(uri: string): string | undefined {
         return this.fileContents.get(uri);
+    }
+
+    /**
+     * Names that other files make visible without being symbols themselves:
+     *  - the name of a global variable list (GVL / persistent list). In the
+     *    CODESYS one-object-per-file export the list's name is the file name
+     *    (`gControl.gvl.st`), not a declaration in the text, and code refers to
+     *    it as `gControl.member`.
+     *  - every TYPE (enum, struct, union, alias) declared in any indexed file.
+     * Upper-cased; cached until the index changes.
+     */
+    public getWorkspaceDeclaredNames(): Set<string> {
+        if (this.declaredNamesCache) return this.declaredNamesCache;
+        const names = new Set<string>();
+        const typeRegex = /^\s*TYPE\s+([A-Za-z_]\w*)/gim;
+        for (const [uri, content] of this.fileContents) {
+            const gvl = /([^\/\\]+?)\.(?:gvl|pvl)\.st$/i.exec(uri);
+            if (gvl) {
+                names.add(decodeURIComponent(gvl[1]).toUpperCase());
+            }
+            let m: RegExpExecArray | null;
+            typeRegex.lastIndex = 0;
+            while ((m = typeRegex.exec(content)) !== null) {
+                names.add(m[1].toUpperCase());
+            }
+        }
+        this.declaredNamesCache = names;
+        return names;
     }
 
     /**

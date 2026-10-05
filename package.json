@@ -107,6 +107,14 @@
     "configuration": {
       "title": "ControlForge Structured Text",
       "properties": {
+        "structured-text.diagnostics.knownIdentifiers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Identifiers that exist in the PLC project but not in the .st files (library namespaces, device-tree globals such as IoConfig_Globals). They are not reported as undefined."
+        },
         "structured-text.format.keywordCase": {
           "type": "string",
           "enum": [

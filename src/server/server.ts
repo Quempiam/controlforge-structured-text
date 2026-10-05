@@ -133,11 +133,13 @@ connection.onInitialized(() => {
         connection.client.register(DidChangeConfigurationNotification.type, undefined);
     }
 
+    loadDiagnosticsSettings();
+
     // Initialize workspace indexer
     connection.workspace.getWorkspaceFolders().then(folders => {
         if (folders && folders.length > 0) {
             const workspaceRoot = uriToFsPath(folders[0].uri);
-            workspaceIndexer.initialize(workspaceRoot, (msg) => connection.console.error(msg));
+            workspaceIndexer.initialize(workspaceRoot, (msg) => connection.console.error(msg), () => revalidateOpenDocuments());
         }
     }).catch(error => {
         connection.console.error(`Workspace init failed: ${error}`);
@@ -392,6 +394,7 @@ let formattingSettings: FormattingOptions = { ...DEFAULT_FORMATTING_OPTIONS };
 
 // Configuration change handler
 connection.onDidChangeConfiguration((_change) => {
+    loadDiagnosticsSettings();
     if (hasConfigurationCapability) {
         connection.workspace.getConfiguration('structured-text.format').then((config: Record<string, unknown>) => {
             if (config) {
@@ -488,6 +491,41 @@ function getMemberFileTexts(currentUri: string): Map<string, string[]> {
     return byParent;
 }
 
+/** Identifiers the user declared as known (library namespaces, device-tree globals...). */
+let userKnownIdentifiers: string[] = [];
+
+function loadDiagnosticsSettings(): void {
+    if (!hasConfigurationCapability) return;
+    connection.workspace.getConfiguration('structured-text.diagnostics').then((config: Record<string, unknown>) => {
+        const raw = config && Array.isArray(config['knownIdentifiers']) ? (config['knownIdentifiers'] as unknown[]) : [];
+        userKnownIdentifiers = raw.filter((x): x is string => typeof x === 'string').map(x => x.toUpperCase());
+        revalidateOpenDocuments();
+    }).catch(() => { /* ignore config errors */ });
+}
+
+/** Names other files make visible (GVL names, TYPEs) plus the user's own list. */
+function currentWorkspaceNames(): Set<string> {
+    const names = new Set(workspaceIndexer.getWorkspaceDeclaredNames());
+    for (const n of userKnownIdentifiers) names.add(n);
+    return names;
+}
+
+function validateDocument(document: TextDocument): void {
+    const symbols = updateSymbolIndex(document);
+    workspaceIndexer.updateFileIndex(document);
+
+    const workspaceSymbols = getOtherFileSymbols(document.uri);
+    const diagnostics = computeDiagnostics(document, symbols, workspaceSymbols, getMemberFileTexts(document.uri), currentWorkspaceNames());
+    connection.sendDiagnostics({ uri: document.uri, diagnostics });
+}
+
+/** Re-run diagnostics of every open document, e.g. once the workspace scan has finished. */
+function revalidateOpenDocuments(): void {
+    for (const document of documents.all()) {
+        validateDocument(document);
+    }
+}
+
 documents.onDidChangeContent(change => {
     // Debounce to avoid re-parsing on every keystroke
     if (changeDebounceTimer) {
@@ -495,22 +533,12 @@ documents.onDidChangeContent(change => {
     }
 
     changeDebounceTimer = setTimeout(() => {
-        const symbols = updateSymbolIndex(change.document);
-        workspaceIndexer.updateFileIndex(change.document);
-
-        const workspaceSymbols = getOtherFileSymbols(change.document.uri);
-        const diagnostics = computeDiagnostics(change.document, symbols, workspaceSymbols, getMemberFileTexts(change.document.uri));
-        connection.sendDiagnostics({ uri: change.document.uri, diagnostics });
+        validateDocument(change.document);
     }, 300); // Wait 300ms after last change
 });
 
 documents.onDidOpen(change => {
-    const symbols = updateSymbolIndex(change.document);
-    workspaceIndexer.updateFileIndex(change.document);
-
-    const workspaceSymbols = getOtherFileSymbols(change.document.uri);
-    const diagnostics = computeDiagnostics(change.document, symbols, workspaceSymbols, getMemberFileTexts(change.document.uri));
-    connection.sendDiagnostics({ uri: change.document.uri, diagnostics });
+    validateDocument(change.document);
 });
 
 // File close handler — cleanup index

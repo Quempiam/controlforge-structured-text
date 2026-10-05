@@ -65,6 +65,8 @@ const VAR_SECTION_OPENERS: string[] = [
     'VAR_OUTPUT',
     'VAR_IN_OUT',
     'VAR_TEMP',
+    'VAR_INST',
+    'VAR_STAT',
     'VAR_CONFIG',
     'VAR_ACCESS',
     'VAR_EXTERNAL',
@@ -326,7 +328,7 @@ const NO_SEMICOLON_KEYWORDS: Set<string> = new Set([
     'INTERFACE', 'END_INTERFACE', 'NAMESPACE', 'END_NAMESPACE',
     'CONFIGURATION', 'END_CONFIGURATION', 'RESOURCE', 'END_RESOURCE',
     // VAR sections
-    'VAR', 'VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT', 'VAR_TEMP',
+    'VAR', 'VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT', 'VAR_TEMP', 'VAR_INST', 'VAR_STAT',
     'VAR_GLOBAL', 'VAR_CONFIG', 'VAR_ACCESS', 'VAR_EXTERNAL', 'END_VAR',
     // Control flow that uses THEN/DO/OF terminators
     'IF', 'ELSIF', 'ELSE', 'END_IF',
@@ -545,7 +547,8 @@ function checkMissingSemicolons(cleanLines: CleanLine[], rawLines: string[]): Di
         const varSections = findVarSections(cleanLines, pou.startLine, pou.endLine);
         let parenDepth = 0;
 
-        for (const cl of cleanLines) {
+        for (let k = 0; k < cleanLines.length; k++) {
+            const cl = cleanLines[k];
             if (cl.lineIndex <= pou.startLine || cl.lineIndex >= pou.endLine) continue;
             if (isInVarSection(cl.lineIndex, varSections)) continue;
 
@@ -561,6 +564,10 @@ function checkMissingSemicolons(cleanLines: CleanLine[], rawLines: string[]): Di
 
             // If we're inside an open paren group, skip semicolon check
             if (parenDepth > 0) continue;
+
+            // A statement continued on the next line (trailing operator, or the next
+            // line starts with one) gets its ';' on the last line only
+            if (continuesStatement(trimmed, nextSignificantText(cleanLines, k, pou.endLine))) continue;
 
             // Get the leading keyword token
             const firstToken = getFirstKeywordToken(trimmed);
@@ -591,6 +598,23 @@ function checkMissingSemicolons(cleanLines: CleanLine[], rawLines: string[]): Di
     }
 
     return diagnostics;
+}
+
+const STATEMENT_CONTINUES_AFTER = /(?::=|<=|>=|<>|[-+*\/=<>,(]|\b(?:AND|OR|XOR|MOD|NOT)\b)$/i;
+const STATEMENT_CONTINUED_BY = /^(?::=|<=|>=|<>|[-+*\/=<>,)]|(?:AND|OR|XOR|MOD)\b)/i;
+
+/** Text of the next non-blank line inside the POU, or '' when there is none. */
+function nextSignificantText(cleanLines: CleanLine[], index: number, endLine: number): string {
+    for (let j = index + 1; j < cleanLines.length; j++) {
+        if (cleanLines[j].lineIndex >= endLine) break;
+        const text = cleanLines[j].text.trim();
+        if (text) return text;
+    }
+    return '';
+}
+
+function continuesStatement(trimmed: string, next: string): boolean {
+    return STATEMENT_CONTINUES_AFTER.test(trimmed) || (next !== '' && STATEMENT_CONTINUED_BY.test(next));
 }
 
 /**
@@ -624,8 +648,16 @@ function isCaseBranchLabel(trimmedLine: string): boolean {
     // Multiple comma-separated labels: "1, 2, 3:"
     if (/^[\w#']+(\s*,\s*[\w#']+)*\s*:$/.test(trimmedLine)) return true;
 
+    // Qualified enum values, lists and ranges: "LocalMode.SetPower:",
+    // "Mode.A, Mode.B:", "Mode.A .. Mode.C:"
+    if (CASE_LABEL_REGEX.test(trimmedLine)) return true;
+
     return false;
 }
+
+const CASE_LABEL_ITEM = "(?:'[^']*'|-?[\\w#]+(?:\\.[A-Za-z_]\\w*)*)";
+const CASE_LABEL_RANGE = `${CASE_LABEL_ITEM}(?:\\s*\\.\\.\\s*${CASE_LABEL_ITEM})?`;
+const CASE_LABEL_REGEX = new RegExp(`^${CASE_LABEL_RANGE}(?:\\s*,\\s*${CASE_LABEL_RANGE})*\\s*:$`);
 
 interface PouBoundary {
     startLine: number;
@@ -735,7 +767,8 @@ function checkUndefinedVariables(
     cleanLines: CleanLine[],
     rawLines: string[],
     symbols: STSymbolExtended[],
-    workspaceSymbols?: STSymbolExtended[]
+    workspaceSymbols?: STSymbolExtended[],
+    workspaceNames?: Set<string>
 ): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     const pouRanges = buildPouRanges(symbols, rawLines);
@@ -749,7 +782,8 @@ function checkUndefinedVariables(
         if (sym.kind === STSymbolKind.Program ||
             sym.kind === STSymbolKind.Function ||
             sym.kind === STSymbolKind.FunctionBlock ||
-            sym.kind === STSymbolKind.Action) {
+            sym.kind === STSymbolKind.Action ||
+            sym.kind === STSymbolKind.Method) {
             pouNames.add(sym.name.toUpperCase());
         }
         if (!sym.parentSymbol && (sym.kind === STSymbolKind.Variable || sym.kind === STSymbolKind.FunctionBlockInstance)) {
@@ -806,7 +840,8 @@ function checkUndefinedVariables(
             if (inCaseOf && isCaseBranchLabel(trimmed)) continue;
 
             // Extract identifier tokens, skipping members after dots
-            const tokens = extractBodyIdentifiers(trimmed);
+            // (the IEC set/reset assignments `x S= y;` / `x R= y;` are operators, not names)
+            const tokens = extractBodyIdentifiers(trimmed.replace(/(^|\s)[SR]=/g, (m) => ' '.repeat(m.length)));
 
             for (const token of tokens) {
                 const upper = token.name.toUpperCase();
@@ -817,6 +852,11 @@ function checkUndefinedVariables(
                 if (pouNames.has(upper)) continue;
                 if (globalVarNames.has(upper)) continue;
                 if (userTypeNames.has(upper)) continue;
+                // GVL names and TYPEs declared in other files
+                if (workspaceNames && workspaceNames.has(upper)) continue;
+
+                // CODESYS/IEC conversions: TO_REAL, TO_INT, TO_WSTRING ...
+                if (/^TO_[A-Z0-9_]+$/.test(upper)) continue;
 
                 // Skip numeric-looking tokens (hex literals like 16#FF produce "FF" after stripping)
                 if (/^\d/.test(token.name)) continue;
@@ -2382,7 +2422,8 @@ export function computeDiagnostics(
     document: TextDocument,
     symbols?: STSymbolExtended[],
     workspaceSymbols?: STSymbolExtended[],
-    memberFileTexts?: Map<string, string[]>
+    memberFileTexts?: Map<string, string[]>,
+    workspaceNames?: Set<string>
 ): Diagnostic[] {
     const text = document.getText();
     const rawLines = text.split('\n');
@@ -2403,7 +2444,7 @@ export function computeDiagnostics(
     if (symbols && symbols.length > 0) {
         diagnostics.push(...checkMissingSemicolons(cleanLines, rawLines));
         diagnostics.push(...checkDuplicateDeclarations(symbols));
-        diagnostics.push(...checkUndefinedVariables(cleanLines, rawLines, symbols, workspaceSymbols));
+        diagnostics.push(...checkUndefinedVariables(cleanLines, rawLines, symbols, workspaceSymbols, workspaceNames));
         diagnostics.push(...checkUnusedVariables(cleanLines, rawLines, symbols, memberFileTexts));
         diagnostics.push(...checkTypeMismatches(cleanLines, symbols));
         diagnostics.push(...checkFBCallInvalidMembers(cleanLines, rawLines, symbols, workspaceSymbols));

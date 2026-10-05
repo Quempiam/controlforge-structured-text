@@ -550,7 +550,7 @@ export class STASTParser {
      */
     private matchVarSectionStart(trimmedLine: string): { suffix: string; qualifiers: string[] } | null {
         const match = trimmedLine.match(
-            /^VAR(_INPUT|_OUTPUT|_IN_OUT|_GLOBAL|_TEMP)?\s*((?:CONSTANT|RETAIN|PERSISTENT|NON_RETAIN)\s*)*$/i
+            /^VAR(_INPUT|_OUTPUT|_IN_OUT|_GLOBAL|_TEMP|_INST|_STAT)?\s*((?:CONSTANT|RETAIN|PERSISTENT|NON_RETAIN)\s*)*$/i
         );
         if (!match) return null;
 
@@ -590,7 +590,10 @@ export class STASTParser {
 
         for (let i = startLine; i <= endLine; i++) {
             const raw = this.lines[i] || '';
-            const clean = this.stripComments(raw).trim();
+            // Drop pragmas ({attribute 'displaymode' := 'binary'}, {info ...}) in front of
+            // a declaration or alone on a line: without ';' they would otherwise be glued
+            // to the next declaration and swallow its name.
+            const clean = this.stripComments(raw).replace(/^(?:\s*\{[^}]*\})+\s*/, '').trim();
             if (!clean) continue;
 
             // Skip END_VAR or nested section starts
